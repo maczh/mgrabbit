@@ -30,5 +30,21 @@ go:
     uri: amqp://test:********@xxx.xxx.xxx.xxx:5672/%2ftest
     exchange: e1 
 ```
+
+### 配置中心的rabbitmq-example-test.yml多连接配置
+```yaml
+go:
+  rabbitmq:
+    multi: true
+    conns: c1,c2
+    c1:
+      uri: amqp://test1:********@xxx.xxx.xxx.xxx:5672/%2ftest1
+      exchange: e1 
+    c2:
+      uri: amqp://test2:********@xxx.xxx.xxx.xxx:5672/%2ftest2
+      exchange: e2 
+```
+
+
 ## 变更记录
 - v0.0.3 多连接支持
