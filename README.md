@@ -30,3 +30,5 @@ go:
     uri: amqp://test:********@xxx.xxx.xxx.xxx:5672/%2ftest
     exchange: e1 
 ```
+## 变更记录
+- v0.0.3 多连接支持
