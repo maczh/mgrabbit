@@ -12,15 +12,17 @@ import (
 )
 
 type rabbitmq struct {
-	rabbit    *jazz.Connection //当前连接
-	exchange  string           //当前交换机
-	conf      *koanf.Koanf
-	confUrl   string
-	multi     bool                        //是否多库连接
-	rabbits   map[string]*jazz.Connection //多连接
-	exchanges map[string]string           //多连接交换机
-	dsns      map[string]string           //连接地址
-	tags      []string                    //多连接的连接名
+	conf        *koanf.Koanf
+	confUrl     string
+	multi       bool                   //是否多库连接
+	connections map[string]*connection //多连接
+	tags        []string               //多连接的连接名
+}
+
+type connection struct {
+	conn     *jazz.Connection
+	exchange string
+	dsn      string
 }
 
 var Rabbit = &rabbitmq{}
@@ -34,8 +36,7 @@ func (r *rabbitmq) Init(rabbitConfigUrl string) {
 		logger.Error("rabbit配置Url为空")
 		return
 	}
-	var err error
-	if r.rabbit == nil && len(r.rabbits) == 0 {
+	if r.connections == nil || len(r.connections) == 0 {
 		if r.conf == nil {
 			resp, err := grequests.Get(rabbitConfigUrl, nil)
 			if err != nil {
@@ -50,77 +51,88 @@ func (r *rabbitmq) Init(rabbitConfigUrl string) {
 				return
 			}
 		}
-		r.rabbits = make(map[string]*jazz.Connection)
-		r.exchanges = make(map[string]string)
-		r.dsns = make(map[string]string)
+		r.connections = make(map[string]*connection)
 		r.tags = make([]string, 0)
 		r.multi = r.conf.Bool("go.rabbitmq.multi")
 		if r.multi {
-			r.tags = strings.Split(r.conf.String("go.rabbitmq.conns"), ",")
-			for _, tag := range r.tags {
-				r.dsns[tag] = r.conf.String(fmt.Sprintf("go.rabbitmq.%s.uri", tag))
-				r.exchanges[tag] = r.conf.String(fmt.Sprintf("go.rabbitmq.%s.exchange", tag))
-				r.rabbits[tag], err = jazz.Connect(r.dsns[tag])
+			tags := strings.Split(r.conf.String("go.rabbitmq.conns"), ",")
+			for _, tag := range tags {
+				dsn := r.conf.String(fmt.Sprintf("go.rabbitmq.%s.uri", tag))
+				conn, err := jazz.Connect(dsn)
 				if err != nil {
 					logger.Error(tag + " RabbitMQ connection failed: " + err.Error())
 				} else {
 					logger.Info(tag + " RabbitMQ connection succeeded")
+					r.connections[tag] = &connection{
+						conn:     conn,
+						exchange: r.conf.String(fmt.Sprintf("go.rabbitmq.%s.exchange", tag)),
+						dsn:      dsn,
+					}
+					r.tags = append(r.tags, tag)
 				}
 			}
-			r.rabbit = r.rabbits[r.tags[0]]
-			r.exchange = r.exchanges[r.tags[0]]
 		} else {
 			dsn := r.conf.String("go.rabbitmq.uri")
-			r.rabbit, err = jazz.Connect(dsn)
+			conn, err := jazz.Connect(dsn)
 			if err != nil {
 				logger.Error("RabbitMQ连接错误:" + err.Error())
 			} else {
-				r.exchange = r.conf.String("go.rabbitmq.exchange")
+				r.connections["0"] = &connection{
+					conn:     conn,
+					exchange: r.conf.String("go.rabbitmq.exchange"),
+					dsn:      dsn,
+				}
 			}
-			r.rabbits["0"] = r.rabbit
-			r.exchanges["0"] = r.exchange
-			r.dsns["0"] = dsn
 		}
 	}
 }
 
 // GetConnection 多连接时获取指定标签的连接
-// 说明: 仅在多连接时使用，切换当前连接为指定标签的连接，在下次GetConnection之前一直不变
-func (r *rabbitmq) GetConnection(tag string) *rabbitmq {
+func (r *rabbitmq) GetConnection(tag ...string) (*connection, error) {
 	if !r.multi {
-		return r
+		return r.connections["0"], nil
 	}
-	if _, ok := r.rabbits[tag]; !ok {
-		logger.Error("RabbitMQ connection tag " + tag + " invalid")
-		return r
+	if len(tag) == 0 || tag[0] == "" {
+		return nil, fmt.Errorf("RabbitMQ Multi connection need a tag to get connection")
 	}
-	r.rabbit = r.rabbits[tag]
-	r.exchange = r.exchanges[tag]
-	return r
+	if _, ok := r.connections[tag[0]]; !ok {
+		logger.Error("RabbitMQ connection tag " + tag[0] + " invalid")
+		return nil, fmt.Errorf("RabbitMQ connection tag %s invalid", tag[0])
+	}
+	return r.connections[tag[0]], nil
 }
 
 func (r *rabbitmq) Close() {
-	if r.rabbit != nil {
-		r.rabbit.Close()
-		r.rabbit = nil
+	if !r.multi {
+		r.connections["0"].conn.Close()
+		delete(r.connections, "0")
+	} else {
+		for tag, _ := range r.connections {
+			r.connections[tag].conn.Close()
+			delete(r.connections, tag)
+		}
 	}
+
 }
 
-func (r *rabbitmq) RabbitSendMessage(queueName string, msg string) {
-	err := r.rabbit.SendMessage(r.exchange, queueName, msg)
+// RabbitSendMessage 向指定队列发送消息
+func (r *connection) RabbitSendMessage(queueName string, msg string) {
+	err := r.conn.SendMessage(r.exchange, queueName, msg)
 	if err != nil {
 		logger.Error("RabbitMQ发送消息错误:" + err.Error())
 	}
 }
 
-func (r *rabbitmq) RabbitMessageListener(queueName string, listener func(msg []byte)) {
+// RabbitMessageListener 侦听指定队列消息，内部自建侦听协程
+func (r *connection) RabbitMessageListener(queueName string, listener func(msg []byte)) {
 	//侦听之前先创建队列
 	r.RabbitCreateNewQueue(queueName)
 	//启动侦听消息处理线程
-	go r.rabbit.ProcessQueue(queueName, listener)
+	go r.conn.ProcessQueue(queueName, listener)
 }
 
-func (r *rabbitmq) RabbitCreateNewQueue(queueName string) {
+// RabbitCreateNewQueue 创建队列
+func (r *connection) RabbitCreateNewQueue(queueName string) {
 	queues := make(map[string]jazz.QueueSpec)
 	binding := &jazz.Binding{
 		Exchange: r.exchange,
@@ -135,13 +147,14 @@ func (r *rabbitmq) RabbitCreateNewQueue(queueName string) {
 	setting := &jazz.Settings{
 		Queues: queues,
 	}
-	err := r.rabbit.CreateScheme(*setting)
+	err := r.conn.CreateScheme(*setting)
 	if err != nil {
 		logger.Error("RabbitMQ创建队列失败:" + err.Error())
 	}
 }
 
-func (r *rabbitmq) RabbitCreateDeadLetterQueue(queueName, toQueueName string, ttl int) {
+// RabbitCreateDeadLetterQueue 创建死信队列
+func (r *connection) RabbitCreateDeadLetterQueue(queueName, toQueueName string, ttl int) {
 	queues := make(map[string]jazz.QueueSpec)
 	binding := &jazz.Binding{
 		Exchange: r.exchange,
@@ -156,7 +169,7 @@ func (r *rabbitmq) RabbitCreateDeadLetterQueue(queueName, toQueueName string, tt
 	setting := &jazz.Settings{
 		Queues: queues,
 	}
-	err := r.rabbit.CreateScheme(*setting)
+	err := r.conn.CreateScheme(*setting)
 	if err != nil {
 		logger.Error("RabbitMQ创建死信队列失败:" + err.Error())
 	}
