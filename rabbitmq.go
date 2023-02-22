@@ -174,3 +174,11 @@ func (r *connection) RabbitCreateDeadLetterQueue(queueName, toQueueName string, 
 		logger.Error("RabbitMQ创建死信队列失败:" + err.Error())
 	}
 }
+
+func (r *rabbitmq) IsMultiDB() bool {
+	return r.multi
+}
+
+func (r *rabbitmq) ListConnNames() []string {
+	return r.tags
+}
