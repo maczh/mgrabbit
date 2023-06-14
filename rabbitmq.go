@@ -8,6 +8,7 @@ import (
 	"github.com/levigross/grequests"
 	"github.com/maczh/jazz"
 	"github.com/sadlil/gologger"
+	"io/ioutil"
 	"strings"
 )
 
@@ -38,13 +39,24 @@ func (r *rabbitmq) Init(rabbitConfigUrl string) {
 	}
 	if r.connections == nil || len(r.connections) == 0 {
 		if r.conf == nil {
-			resp, err := grequests.Get(rabbitConfigUrl, nil)
-			if err != nil {
-				logger.Error("RabbitMQ配置下载失败! " + err.Error())
-				return
+			var confData []byte
+			var err error
+			if strings.HasPrefix(r.confUrl, "http://") {
+				resp, err := grequests.Get(r.confUrl, nil)
+				if err != nil {
+					logger.Error("MySQL配置下载失败! " + err.Error())
+					return
+				}
+				confData = []byte(resp.String())
+			} else {
+				confData, err = ioutil.ReadFile(r.confUrl)
+				if err != nil {
+					logger.Error(fmt.Sprintf("MySQL本地配置文件%s读取失败:%s", r.confUrl, err.Error()))
+					return
+				}
 			}
 			r.conf = koanf.New(".")
-			err = r.conf.Load(rawbytes.Provider([]byte(resp.String())), yaml.Parser())
+			err = r.conf.Load(rawbytes.Provider(confData), yaml.Parser())
 			if err != nil {
 				logger.Error("MongoDB配置解析错误:" + err.Error())
 				r.conf = nil
