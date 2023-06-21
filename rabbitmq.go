@@ -1,6 +1,7 @@
 package mgrabbit
 
 import (
+	"errors"
 	"fmt"
 	"github.com/knadh/koanf"
 	"github.com/knadh/koanf/parsers/yaml"
@@ -125,6 +126,50 @@ func (r *rabbitmq) Close() {
 		}
 	}
 
+}
+
+func (r *rabbitmq) reconnect(tag string) error {
+	dsn := r.conf.String(fmt.Sprintf("go.rabbitmq.%s.uri", tag))
+	conn, err := jazz.Connect(dsn)
+	if err != nil {
+		logger.Error(tag + " RabbitMQ connection failed: " + err.Error())
+		return err
+	} else {
+		logger.Info(tag + " RabbitMQ connection succeeded")
+		r.connections[tag] = &connection{
+			conn:     conn,
+			exchange: r.conf.String(fmt.Sprintf("go.rabbitmq.%s.exchange", tag)),
+			dsn:      dsn,
+		}
+	}
+	return nil
+}
+
+func (r *rabbitmq) Check() error {
+	var err error
+	if r.multi {
+		for _, tag := range r.tags {
+			if conn, ok := r.connections[tag]; !ok || conn.conn.IsClosed() {
+				logger.Error("RabbitMQ " + tag + " client has closed")
+				err = r.reconnect(tag)
+				if err != nil {
+					logger.Error("RabbitMQ " + tag + " client reconnect failed: " + err.Error())
+				}
+				if conn, ok := r.connections[tag]; !ok || conn.conn.IsClosed() {
+					return errors.New("RabbitMQ " + tag + "  client has closed")
+				}
+			}
+		}
+	} else {
+		if conn, ok := r.connections["0"]; !ok || conn.conn.IsClosed() {
+			logger.Error("RabbitMQ client has closed")
+			r.Init("")
+			if conn, ok := r.connections["0"]; !ok || conn.conn.IsClosed() {
+				return errors.New("RabbitMQ client has closed")
+			}
+		}
+	}
+	return err
 }
 
 // RabbitSendMessage 向指定队列发送消息
