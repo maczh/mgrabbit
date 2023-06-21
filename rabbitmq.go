@@ -44,21 +44,21 @@ func (r *rabbitmq) Init(rabbitConfigUrl string) {
 			if strings.HasPrefix(r.confUrl, "http://") {
 				resp, err := grequests.Get(r.confUrl, nil)
 				if err != nil {
-					logger.Error("MySQL配置下载失败! " + err.Error())
+					logger.Error("RabbitMQ配置下载失败! " + err.Error())
 					return
 				}
 				confData = []byte(resp.String())
 			} else {
 				confData, err = ioutil.ReadFile(r.confUrl)
 				if err != nil {
-					logger.Error(fmt.Sprintf("MySQL本地配置文件%s读取失败:%s", r.confUrl, err.Error()))
+					logger.Error(fmt.Sprintf("RabbitMQ本地配置文件%s读取失败:%s", r.confUrl, err.Error()))
 					return
 				}
 			}
 			r.conf = koanf.New(".")
 			err = r.conf.Load(rawbytes.Provider(confData), yaml.Parser())
 			if err != nil {
-				logger.Error("MongoDB配置解析错误:" + err.Error())
+				logger.Error("RabbitMQ配置解析错误:" + err.Error())
 				r.conf = nil
 				return
 			}
