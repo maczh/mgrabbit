@@ -11,6 +11,7 @@ import (
 	"github.com/sadlil/gologger"
 	"io/ioutil"
 	"strings"
+	"time"
 )
 
 type rabbitmq struct {
@@ -130,6 +131,10 @@ func (r *rabbitmq) Close() {
 
 func (r *rabbitmq) reconnect(tag string) error {
 	dsn := r.conf.String(fmt.Sprintf("go.rabbitmq.%s.uri", tag))
+	if tag == "" || tag == "0" {
+		dsn = r.conf.String("go.rabbitmq.uri")
+		tag = "0"
+	}
 	conn, err := jazz.Connect(dsn)
 	if err != nil {
 		logger.Error(tag + " RabbitMQ connection failed: " + err.Error())
@@ -163,7 +168,7 @@ func (r *rabbitmq) Check() error {
 	} else {
 		if conn, ok := r.connections["0"]; !ok || conn.conn.IsClosed() {
 			logger.Error("RabbitMQ client has closed")
-			r.Init("")
+			r.reconnect("0")
 			if conn, ok := r.connections["0"]; !ok || conn.conn.IsClosed() {
 				return errors.New("RabbitMQ client has closed")
 			}
@@ -181,11 +186,34 @@ func (r *connection) RabbitSendMessage(queueName string, msg string) {
 }
 
 // RabbitMessageListener 侦听指定队列消息，内部自建侦听协程
-func (r *connection) RabbitMessageListener(queueName string, listener func(msg []byte)) {
+func (r *connection) listener(queueName string, listener func(msg []byte)) {
 	//侦听之前先创建队列
 	r.RabbitCreateNewQueue(queueName)
 	//启动侦听消息处理线程
-	go r.conn.ProcessQueue(queueName, listener)
+	err := r.conn.ProcessQueue(queueName, listener)
+	if err != nil {
+		logger.Error("RabbitMQ侦听协程错误退出:" + err.Error())
+	}
+	logger.Error("RabbitMQ侦听协程退出")
+}
+
+func (r *rabbitmq) RabbitMessageListener(tag, queueName string, listener func(msg []byte)) {
+	if tag == "" {
+		tag = "0"
+	}
+	go func() {
+		for {
+			conn, err := r.GetConnection(tag)
+			if err != nil {
+				logger.Error("获取RabbitMQ连接失败: " + err.Error())
+				return
+			}
+			conn.listener(queueName, listener)
+			logger.Error("消息侦听协程意外退出")
+			time.Sleep(time.Second)
+			r.Check()
+		}
+	}()
 }
 
 // RabbitCreateNewQueue 创建队列
