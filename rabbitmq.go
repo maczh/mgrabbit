@@ -104,6 +104,9 @@ func (r *rabbitmq) Init(rabbitConfigUrl string) {
 // GetConnection 多连接时获取指定标签的连接
 func (r *rabbitmq) GetConnection(tag ...string) (*connection, error) {
 	if !r.multi {
+		if r.connections["0"].conn.IsClosed() {
+			r.reconnect("0")
+		}
 		return r.connections["0"], nil
 	}
 	if len(tag) == 0 || tag[0] == "" {
@@ -112,6 +115,9 @@ func (r *rabbitmq) GetConnection(tag ...string) (*connection, error) {
 	if _, ok := r.connections[tag[0]]; !ok {
 		logger.Error("RabbitMQ connection tag " + tag[0] + " invalid")
 		return nil, fmt.Errorf("RabbitMQ connection tag %s invalid", tag[0])
+	}
+	if r.connections[tag[0]].conn.IsClosed() {
+		r.reconnect(tag[0])
 	}
 	return r.connections[tag[0]], nil
 }
