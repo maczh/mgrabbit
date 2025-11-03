@@ -3,20 +3,20 @@ package mgrabbit
 import (
 	"errors"
 	"fmt"
+	"strings"
+	"time"
+
 	"github.com/knadh/koanf"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/rawbytes"
-	"github.com/levigross/grequests"
 	"github.com/maczh/jazz"
 	"github.com/sadlil/gologger"
-	"io/ioutil"
-	"strings"
-	"time"
 )
 
 type rabbitmq struct {
 	conf        *koanf.Koanf
 	confUrl     string
+	configData  []byte
 	multi       bool                   //是否多库连接
 	connections map[string]*connection //多连接
 	tags        []string               //多连接的连接名
@@ -31,40 +31,18 @@ type connection struct {
 var Rabbit = &rabbitmq{}
 var logger = gologger.GetLogger()
 
-func (r *rabbitmq) Init(rabbitConfigUrl string) {
-	if rabbitConfigUrl != "" {
-		r.confUrl = rabbitConfigUrl
-	}
-	if r.confUrl == "" {
-		logger.Error("rabbit配置Url为空")
-		return
+func (r *rabbitmq) Init(configData []byte) {
+	r.configData = configData
+	r.conf = koanf.New(".")
+	if r.configData != nil {
+		err := r.conf.Load(rawbytes.Provider(r.configData), yaml.Parser())
+		if err != nil {
+			logger.Error("RabbitMQ配置解析错误:" + err.Error())
+			r.conf = nil
+			return
+		}
 	}
 	if r.connections == nil || len(r.connections) == 0 {
-		if r.conf == nil {
-			var confData []byte
-			var err error
-			if strings.HasPrefix(r.confUrl, "http://") {
-				resp, err := grequests.Get(r.confUrl, nil)
-				if err != nil {
-					logger.Error("RabbitMQ配置下载失败! " + err.Error())
-					return
-				}
-				confData = []byte(resp.String())
-			} else {
-				confData, err = ioutil.ReadFile(r.confUrl)
-				if err != nil {
-					logger.Error(fmt.Sprintf("RabbitMQ本地配置文件%s读取失败:%s", r.confUrl, err.Error()))
-					return
-				}
-			}
-			r.conf = koanf.New(".")
-			err = r.conf.Load(rawbytes.Provider(confData), yaml.Parser())
-			if err != nil {
-				logger.Error("RabbitMQ配置解析错误:" + err.Error())
-				r.conf = nil
-				return
-			}
-		}
 		r.connections = make(map[string]*connection)
 		r.tags = make([]string, 0)
 		r.multi = r.conf.Bool("go.rabbitmq.multi")
