@@ -170,7 +170,24 @@ func (r *connection) RabbitSendMessage(queueName string, msg string) {
 }
 
 // RabbitMessageListener 侦听指定队列消息，内部自建侦听协程
+// func (r *connection) listener(queueName string, listener func(msg []byte)) {
+// 	//侦听之前先创建队列
+// 	r.RabbitCreateNewQueue(queueName)
+// 	//启动侦听消息处理线程
+// 	err := r.conn.ProcessQueue(queueName, listener)
+// 	if err != nil {
+// 		logger.Error("RabbitMQ侦听协程错误退出:" + err.Error())
+// 	}
+// 	logger.Error("RabbitMQ侦听协程退出")
+// }
+
+// RabbitMessageListener 侦听指定队列消息，内部自建侦听协程
 func (r *connection) listener(queueName string, listener func(msg []byte)) {
+	defer func() {
+		if err := recover(); err != nil {
+			logger.Error(fmt.Sprintf("RabbitMQ侦听协程发生panic: %v", err))
+		}
+	}()
 	//侦听之前先创建队列
 	r.RabbitCreateNewQueue(queueName)
 	//启动侦听消息处理线程
@@ -186,6 +203,11 @@ func (r *rabbitmq) RabbitMessageListener(tag, queueName string, listener func(ms
 		tag = "0"
 	}
 	go func() {
+		defer func() {
+			if err := recover(); err != nil {
+				logger.Error(fmt.Sprintf("RabbitMQ消息侦听协程发生panic: %v", err))
+			}
+		}()
 		for {
 			conn, err := r.GetConnection(tag)
 			if err != nil {
@@ -199,6 +221,7 @@ func (r *rabbitmq) RabbitMessageListener(tag, queueName string, listener func(ms
 		}
 	}()
 }
+
 
 // RabbitCreateNewQueue 创建队列
 func (r *connection) RabbitCreateNewQueue(queueName string) {
